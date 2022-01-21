@@ -5,8 +5,8 @@ This is a tiny personal static site generator. It started as a bash script, but 
 This binary will be used to generate https://jakintosh.com and probably also eventually https://coalescent.computer.
 
 This project relies on:
-    [Tera](https://github.com/Keats/tera) — for templating
-    [Pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) — for parsing markdown -> html
-    [Clap](https://github.com/clap-rs/clap) — for easy CLI setup
-    [Anyhow](https://github.com/dtolnay/anyhow)/[Thiserror](https://github.com/dtolnay/thiserror) — for nice error management
-    [Blake2](https://github.com/RustCrypto/hashes/tree/master/blake2) — to create content hashes for permalinks
+- [Tera](https://github.com/Keats/tera) — for templating
+- [Pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) — for parsing markdown -> html
+- [Clap](https://github.com/clap-rs/clap) — for easy CLI setup
+- [Anyhow](https://github.com/dtolnay/anyhow)/[Thiserror](https://github.com/dtolnay/thiserror) — for nice error management
+- [Blake2](https://github.com/RustCrypto/hashes/tree/master/blake2) — to create content hashes for permalinks
