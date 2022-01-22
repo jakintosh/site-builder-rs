@@ -10,7 +10,7 @@ use crate::files::*;
 use crate::parsing::{
     parse_html_file, parse_markdown_file, parse_toml_file, SiteContentType, SiteContext,
 };
-use crate::rendering::{write_page_to_permalink, RenderPassDescriptor, Renderer};
+use crate::rendering::{RenderDestination, RenderPassDescriptor, Renderer};
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::collections::HashMap;
@@ -41,6 +41,7 @@ struct Args {
 #[derive(Clone)]
 struct BuildConfig {
     pub debug: bool,
+    pub source_dir_path: String,
     pub config_file_path: String,
     pub output_dir_path: String,
     pub content_dir_path: String,
@@ -86,11 +87,12 @@ fn create_build_config(args: Args) -> Result<BuildConfig> {
         .context(r"Couldn't create {out}/permalink directory")?;
 
     let templates_glob = format!("{src}/templates/**/*.tmpl", src = source_dir_path);
-    let content_md_glob = format!("{src}/**/*.md", src = content_dir_path);
-    let content_html_glob = format!("{src}/**/*.html", src = content_dir_path);
+    let content_md_glob = format!("{cnt}/**/*.md", cnt = content_dir_path);
+    let content_html_glob = format!("{cnt}/**/*.html", cnt = content_dir_path);
 
     Ok(BuildConfig {
         debug: args.debug,
+        source_dir_path,
         config_file_path,
         output_dir_path,
         content_dir_path,
@@ -137,49 +139,99 @@ fn main() -> Result<()> {
     let mut renderer = Renderer::new(&build_config, &site_config)
         .context("Failed to create a site html renderer")?;
 
-    // render all markdown
-    for md_path in get_paths_from_glob(&build_config.content_md_glob)? {
-        let render_name = get_relative_path_string(&md_path, &build_config.content_dir_path)?;
-        let (frontmatter, html) = parse_markdown_file(&md_path)?;
+    // render all content
+    let md_paths = get_paths_from_glob(&build_config.content_md_glob)
+        .context("Failed to resolve markdown glob")?;
+    let html_paths = get_paths_from_glob(&build_config.content_html_glob)
+        .context("Failed to resolve html glob")?;
+    let paths: Vec<_> = vec![md_paths, html_paths].into_iter().flatten().collect();
+    for path in paths {
+        let render_name = get_stripped_base_path_string(&path, &build_config.content_dir_path)
+            .context("Failed to strip content path prefix")?;
+        let (context, html) = match path.extension() {
+            Some(ext) if ext == "md" => {
+                parse_markdown_file(&path).context("Failed to parse markdown file")?
+            }
+            Some(ext) if ext == "html" => {
+                parse_html_file(&path).context("Failed to parse html file")?
+            }
+            _ => {
+                println!(
+                    "Skipping render of unknown file {:?} in content directory",
+                    path
+                );
+                continue;
+            }
+        };
         let rpd = RenderPassDescriptor {
             render_name: render_name.clone(),
-            context: frontmatter,
+            content_context: context,
             html,
+            destination: RenderDestination::Permalink,
         };
-        let render = renderer.render(rpd)?;
-        write_page_to_permalink(
-            &render,
-            &build_config.output_perma_dir_path,
-            build_config.debug,
-        )?;
+        renderer
+            .render(rpd)
+            .context(format!("Failed to render content '{}'", render_name))?;
     }
 
-    // render all html
-    for html_path in get_paths_from_glob(&build_config.content_html_glob)? {
-        let render_name = get_relative_path_string(&html_path, &build_config.content_dir_path)?;
-        let (frontmatter, html) = parse_html_file(&html_path)?;
+    // process our sections to build a site graph
+    for section in &site_config.context.sections {
+        if build_config.debug {
+            println!("Building section '{}'", section.name);
+        }
+        let index_content_name = section.index_content.clone();
+        let index_content_path = std::path::PathBuf::from(format!(
+            "{}/{}",
+            &build_config.source_dir_path, &index_content_name
+        ));
+        // build the directory for this section
+        // let site_path = section.site_path.
+        let section_path = format!("{}/{}", build_config.output_dir_path, section.site_path);
+        ensure_directory(&section_path).context(format!(
+            "Couldn't ensure required sitemap directory '{}'",
+            section.site_path,
+        ))?;
+
+        // render the index content page
+        let (context, html) = match index_content_path.extension() {
+            Some(ext) if ext == "md" => {
+                parse_markdown_file(&index_content_path).context("Failed to parse markdown file")?
+            }
+            Some(ext) if ext == "html" => {
+                parse_html_file(&index_content_path).context("Failed to parse html file")?
+            }
+            _ => {
+                println!(
+                    "Skipping render of unknown file {:?} in content directory",
+                    index_content_path
+                );
+                continue;
+            }
+        };
         let rpd = RenderPassDescriptor {
-            render_name,
-            context: frontmatter,
+            render_name: index_content_name,
+            content_context: context,
             html,
+            destination: RenderDestination::Explicit {
+                path: section_path.clone(),
+                filename: String::from("index.html"),
+            },
         };
-        let render = renderer.render(rpd)?;
-        write_page_to_permalink(
-            &render,
-            &build_config.output_perma_dir_path,
-            build_config.debug,
-        )?;
+        let _render = renderer.render(rpd)?;
     }
-
-    // // process our sections to build a site graph
-    // for section in site_config.sections {
-    //     let section_path = format!("{}/{}", build_config.output_dir, section.site_path);
-    //     ensure_directory(&section_path)?;
-    // }
 
     // copy over css
     let css_out_path = format!("{}/css", &build_config.output_dir_path);
-    dircpy::copy_dir(&build_config.css_dir_path, &css_out_path).expect("css failed to copy");
+    dircpy::copy_dir_advanced(
+        &build_config.css_dir_path,
+        &css_out_path,
+        true,
+        false,
+        false,
+        vec![],
+        vec![],
+    )
+    .expect("css failed to copy");
 
     if build_config.debug {
         println!("\n=================== End Site Builder ===================\n");

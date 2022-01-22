@@ -12,8 +12,8 @@ pub(crate) enum Error {
     #[error("Couldn't parse toml")]
     TomlParseError { source: toml::de::Error },
 
-    #[error("Couldn't parse markdown")]
-    MarkdownParseError { source: std::io::Error },
+    #[error("Couldn't load content")]
+    ContentLoadError { source: std::io::Error },
 }
 
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
@@ -42,7 +42,6 @@ pub(crate) struct SiteContext {
     pub site_title: String,
     pub language_code: String,
     pub content_type: String,
-    pub base_url: String,
     pub sections: Vec<SiteSection>,
     pub content_types: Vec<SiteContentType>,
 }
@@ -102,7 +101,6 @@ pub(crate) fn split_frontmatter_content<T: DeserializeOwned>(
         state = match state {
             State::WaitingForFrontmatter => match line {
                 "---" => State::IngestingFrontmatter,
-                line if line.is_empty() => State::WaitingForFrontmatter,
                 _ => {
                     should_ingest = true;
 
@@ -130,6 +128,7 @@ pub(crate) fn split_frontmatter_content<T: DeserializeOwned>(
         };
         if should_ingest {
             ingest.push_str(line);
+            ingest.push_str("\n");
         }
     }
 
@@ -158,7 +157,7 @@ pub(crate) fn wrap_content_in_template(content: &str, base_template: &str) -> St
 fn parse_content_file<T: DeserializeOwned>(
     path: impl AsRef<Path>,
 ) -> Result<(Option<T>, String), Error> {
-    let file = read_file_contents(&path).map_err(|e| Error::MarkdownParseError { source: e })?;
+    let file = read_file_contents(&path).map_err(|e| Error::ContentLoadError { source: e })?;
     let (frontmatter, content) = split_frontmatter_content::<T>(&file)?;
 
     Ok((frontmatter, content))
@@ -218,7 +217,7 @@ mod tests {
     fn test_site_config_deserialize_toml() {
         let toml = r#"site_title = "jakintosh"
 language_code = "en-us"
-content_template = "article.tmpl"
+content_type = "post"
 
 [[sections]]
 name = "home"
@@ -249,7 +248,6 @@ content_template = "post.tmpl""#;
             site_title: "title".to_owned(),
             language_code: "en-US".to_owned(),
             content_type: "default.tmpl".to_owned(),
-            base_url: "./".to_owned(),
             sections: vec![SiteSection {
                 name: "section".to_owned(),
                 site_path: "section".to_owned(),
