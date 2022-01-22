@@ -1,7 +1,9 @@
 use glob::glob;
-use std::fs;
-use std::io::Error as IoError;
-use std::path::{Path, PathBuf, StripPrefixError};
+use std::{
+    fs,
+    io::Error as IoError,
+    path::{Path, PathBuf, StripPrefixError},
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

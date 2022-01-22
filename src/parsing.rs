@@ -1,9 +1,8 @@
-use serde::de::DeserializeOwned;
+use crate::files::read_file_contents;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
 use toml;
-
-use crate::files::read_file_contents;
 
 #[derive(Debug, Error)]
 pub(crate) enum Error {
@@ -17,12 +16,72 @@ pub(crate) enum Error {
     MarkdownParseError { source: std::io::Error },
 }
 
+#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
+pub(crate) struct ContentContext {
+    pub content_type: Option<String>,
+    pub content_title: Option<String>,
+    pub base_url: Option<String>,
+}
+
+impl ContentContext {
+    pub(crate) fn extend_context(&self, tera_context: &mut tera::Context) {
+        if let Some(content_type) = &self.content_type {
+            tera_context.insert("content_type", content_type);
+        }
+        if let Some(content_title) = &self.content_title {
+            tera_context.insert("content_title", content_title);
+        }
+        if let Some(base_url) = &self.base_url {
+            tera_context.insert("base_url", base_url);
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub(crate) struct SiteContext {
+    pub site_title: String,
+    pub language_code: String,
+    pub content_type: String,
+    pub base_url: String,
+    pub sections: Vec<SiteSection>,
+    pub content_types: Vec<SiteContentType>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub(crate) struct SiteSection {
+    pub name: String,
+    pub site_path: String,
+    pub index_content: String,
+    pub priority: u8,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct SiteContentType {
+    pub name: String,
+    pub content_template: String,
+}
+
 pub(crate) fn parse_toml_string<T: DeserializeOwned>(toml_str: &str) -> Result<T, Error> {
     toml::from_str(&toml_str).map_err(|e| Error::TomlParseError { source: e })
 }
+
 pub(crate) fn parse_toml_file<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<T, Error> {
     let file_contents = read_file_contents(path).map_err(|e| Error::TomlLoadError { source: e })?;
     parse_toml_string::<T>(&file_contents)
+}
+
+pub(crate) fn parse_html_file<T: DeserializeOwned>(
+    path: impl AsRef<Path>,
+) -> Result<(Option<T>, String), Error> {
+    Ok(parse_content_file(path)?)
+}
+
+pub(crate) fn parse_markdown_file<T: DeserializeOwned>(
+    path: impl AsRef<Path>,
+) -> Result<(Option<T>, String), Error> {
+    let (frontmatter, markdown) = parse_content_file(path)?;
+
+    Ok((frontmatter, convert_markdown_to_html(&markdown)))
 }
 
 pub(crate) fn split_frontmatter_content<T: DeserializeOwned>(
@@ -84,37 +143,8 @@ pub(crate) fn split_frontmatter_content<T: DeserializeOwned>(
 
     Ok((frontmatter_struct, content))
 }
-pub(crate) fn parse_content_file<T: DeserializeOwned>(
-    path: impl AsRef<Path>,
-) -> Result<(Option<T>, String), Error> {
-    let file = read_file_contents(&path).map_err(|e| Error::MarkdownParseError { source: e })?;
-    let (frontmatter, content) = split_frontmatter_content::<T>(&file)?;
 
-    Ok((frontmatter, content))
-}
-
-pub(crate) fn parse_html_file<T: DeserializeOwned>(
-    path: impl AsRef<Path>,
-) -> Result<(Option<T>, String), Error> {
-    Ok(parse_content_file(path)?)
-}
-
-pub(crate) fn parse_markdown_file<T: DeserializeOwned>(
-    path: impl AsRef<Path>,
-) -> Result<(Option<T>, String), Error> {
-    let (frontmatter, markdown) = parse_content_file(path)?;
-
-    Ok((frontmatter, convert_markdown_to_html(&markdown)))
-}
-
-pub(crate) fn convert_markdown_to_html(markdown: &String) -> String {
-    let mut html = String::new();
-    let parser = pulldown_cmark::Parser::new(&markdown);
-    pulldown_cmark::html::push_html(&mut html, parser);
-
-    html
-}
-pub(crate) fn wrap_html_as_template(content: &str, base_template: &str) -> String {
+pub(crate) fn wrap_content_in_template(content: &str, base_template: &str) -> String {
     let mut template = String::new();
     let template_header = format!("{{% extends \"{tmpl}\" %}}\n", tmpl = base_template);
     template.push_str(&template_header);
@@ -125,19 +155,35 @@ pub(crate) fn wrap_html_as_template(content: &str, base_template: &str) -> Strin
     template
 }
 
+fn parse_content_file<T: DeserializeOwned>(
+    path: impl AsRef<Path>,
+) -> Result<(Option<T>, String), Error> {
+    let file = read_file_contents(&path).map_err(|e| Error::MarkdownParseError { source: e })?;
+    let (frontmatter, content) = split_frontmatter_content::<T>(&file)?;
+
+    Ok((frontmatter, content))
+}
+
+fn convert_markdown_to_html(markdown: &String) -> String {
+    let mut html = String::new();
+    let parser = pulldown_cmark::Parser::new(&markdown);
+    pulldown_cmark::html::push_html(&mut html, parser);
+
+    html
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_toml_string;
-    use crate::{ContentFrontmatter, SiteConfiguration, SiteContentType, SiteSection};
+    use super::{parse_toml_string, ContentContext, SiteContentType, SiteContext, SiteSection};
 
     #[test]
     fn test_frontmatter_deserialize_toml() {
         let frontmatter_toml = "content_type = \"post\"\ncontent_title = \"title\"";
-        let frontmatter: ContentFrontmatter =
+        let frontmatter: ContentContext =
             parse_toml_string(frontmatter_toml).expect("failed to parse toml");
         assert_eq!(
             frontmatter,
-            ContentFrontmatter {
+            ContentContext {
                 content_title: Some("title".to_owned()),
                 content_type: Some("post".to_owned()),
                 base_url: None,
@@ -147,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_frontmatter_serialize_json() {
-        let frontmatter = ContentFrontmatter {
+        let frontmatter = ContentContext {
             content_title: Some("title".to_owned()),
             content_type: Some("post".to_owned()),
             base_url: None,
@@ -190,7 +236,7 @@ priority = 2
 name = "post"
 content_template = "post.tmpl""#;
 
-        let site_config: SiteConfiguration =
+        let site_config: SiteContext =
             parse_toml_string(&toml).expect("couldn't parse site config toml");
         assert_eq!(site_config.sections.len(), 2);
         assert_eq!(site_config.content_types.len(), 1);
@@ -199,10 +245,10 @@ content_template = "post.tmpl""#;
 
     #[test]
     fn test_site_config_serialize_json() {
-        let site_config = SiteConfiguration {
+        let site_config = SiteContext {
             site_title: "title".to_owned(),
             language_code: "en-US".to_owned(),
-            content_template: "default.tmpl".to_owned(),
+            content_type: "default.tmpl".to_owned(),
             base_url: "./".to_owned(),
             sections: vec![SiteSection {
                 name: "section".to_owned(),
