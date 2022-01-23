@@ -20,7 +20,7 @@ pub(crate) enum Error {
 pub(crate) struct ContentContext {
     pub content_type: Option<String>,
     pub content_title: Option<String>,
-    pub base_url: Option<String>,
+    pub data_type: Option<String>,
 }
 
 impl ContentContext {
@@ -31,8 +31,8 @@ impl ContentContext {
         if let Some(content_title) = &self.content_title {
             tera_context.insert("content_title", content_title);
         }
-        if let Some(base_url) = &self.base_url {
-            tera_context.insert("base_url", base_url);
+        if let Some(data_type) = &self.data_type {
+            tera_context.insert("data_type", data_type);
         }
     }
 }
@@ -185,7 +185,7 @@ mod tests {
             ContentContext {
                 content_title: Some("title".to_owned()),
                 content_type: Some("post".to_owned()),
-                base_url: None,
+                data_type: None,
             }
         );
     }
@@ -195,7 +195,7 @@ mod tests {
         let frontmatter = ContentContext {
             content_title: Some("title".to_owned()),
             content_type: Some("post".to_owned()),
-            base_url: None,
+            data_type: None,
         };
         let frontmatter_json =
             serde_json::to_value(frontmatter).expect("failed to serialize frontmatter");

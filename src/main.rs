@@ -2,6 +2,10 @@
 ///
 /// a static site builder for me, jakintosh
 ///
+/// to use:
+/// `$ site-builder -s {$SOURCE_FILE_DIRECTORY} -d {$OUTPUT_DIRECTORY}`
+/// `$ site-builder --help`
+///
 mod files;
 mod parsing;
 mod rendering;
