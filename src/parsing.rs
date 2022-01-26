@@ -69,6 +69,16 @@ pub(crate) fn parse_toml_file<T: DeserializeOwned>(path: impl AsRef<Path>) -> Re
     parse_toml_string::<T>(&file_contents)
 }
 
+pub(crate) fn parse_supported_file(
+    path: impl AsRef<std::path::Path>,
+) -> Result<Option<(Option<ContentContext>, String)>, Error> {
+    match path.as_ref().extension() {
+        Some(ext) if ext == "md" => Ok(Some(parse_markdown_file(&path)?)),
+        Some(ext) if ext == "html" => Ok(Some(parse_html_file(&path)?)),
+        _ => Ok(None),
+    }
+}
+
 pub(crate) fn parse_html_file<T: DeserializeOwned>(
     path: impl AsRef<Path>,
 ) -> Result<(Option<T>, String), Error> {

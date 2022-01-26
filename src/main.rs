@@ -11,9 +11,7 @@ mod parsing;
 mod rendering;
 
 use crate::files::*;
-use crate::parsing::{
-    parse_html_file, parse_markdown_file, parse_toml_file, SiteContentType, SiteContext,
-};
+use crate::parsing::{parse_supported_file, parse_toml_file, SiteContentType, SiteContext};
 use crate::rendering::{RenderDestination, RenderPassDescriptor, Renderer};
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -42,18 +40,17 @@ struct Args {
     debug: bool,
 }
 
-#[derive(Clone)]
 struct BuildConfig {
-    pub debug: bool,
-    pub source_dir_path: String,
-    pub config_file_path: String,
-    pub output_dir_path: String,
-    pub content_dir_path: String,
-    pub css_dir_path: String,
-    pub output_perma_dir_path: String,
-    pub templates_glob: String,
-    pub content_md_glob: String,
-    pub content_html_glob: String,
+    debug: bool,
+    source_dir_path: String,
+    config_file_path: String,
+    output_dir_path: String,
+    content_dir_path: String,
+    css_dir_path: String,
+    output_perma_dir_path: String,
+    templates_glob: String,
+    content_md_glob: String,
+    content_html_glob: String,
 }
 
 struct SiteConfig {
@@ -152,18 +149,12 @@ fn main() -> Result<()> {
     for path in paths {
         let render_name = get_stripped_base_path_string(&path, &build_config.content_dir_path)
             .context("Failed to strip content path prefix")?;
-        let (context, html) = match path.extension() {
-            Some(ext) if ext == "md" => {
-                parse_markdown_file(&path).context("Failed to parse markdown file")?
-            }
-            Some(ext) if ext == "html" => {
-                parse_html_file(&path).context("Failed to parse html file")?
-            }
-            _ => {
-                println!(
-                    "Skipping render of unknown file {:?} in content directory",
-                    path
-                );
+        let (context, html) = match parse_supported_file(&path)
+            .context("Failed to parse content file for rendering")?
+        {
+            Some((content, html)) => (content, html),
+            None => {
+                println!("Didn't render unexpected '/content' file {:?}", path);
                 continue;
             }
         };
@@ -189,7 +180,6 @@ fn main() -> Result<()> {
             &build_config.source_dir_path, &index_content_name
         ));
         // build the directory for this section
-        // let site_path = section.site_path.
         let section_path = format!("{}/{}", build_config.output_dir_path, section.site_path);
         ensure_directory(&section_path).context(format!(
             "Couldn't ensure required sitemap directory '{}'",
@@ -197,21 +187,13 @@ fn main() -> Result<()> {
         ))?;
 
         // render the index content page
-        let (context, html) = match index_content_path.extension() {
-            Some(ext) if ext == "md" => {
-                parse_markdown_file(&index_content_path).context("Failed to parse markdown file")?
-            }
-            Some(ext) if ext == "html" => {
-                parse_html_file(&index_content_path).context("Failed to parse html file")?
-            }
-            _ => {
-                println!(
-                    "Skipping render of unknown file {:?} in content directory",
-                    index_content_path
-                );
-                continue;
-            }
+        let (context, html) = match parse_supported_file(index_content_path)
+            .context("Failed to load section index file")?
+        {
+            Some((content, html)) => (content, html),
+            None => continue,
         };
+
         let rpd = RenderPassDescriptor {
             render_name: index_content_name,
             content_context: context,
