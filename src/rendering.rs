@@ -2,7 +2,7 @@ use crate::files::{get_relative_path_string, write_file_contents, Error as Files
 use crate::parsing::{wrap_content_in_template, ContentContext};
 use crate::{BuildConfig, SiteConfig};
 use base64ct::{Base64Url, Encoding};
-use blake2::{Blake2s256, Digest};
+use blake2s_simd::Params;
 use std::fmt::Debug;
 use thiserror::Error;
 
@@ -173,8 +173,11 @@ fn export(render: Render, build_config: &BuildConfig) -> Result<(), Error> {
     let (filename, path) = match render.pass_descriptor.destination {
         RenderDestination::Explicit { path, filename } => (filename, path),
         RenderDestination::Permalink => {
-            let hash = Base64Url::encode_string(&Blake2s256::digest(&render.output));
-            let filename = format!("{}.html", hash);
+            let hash = Params::new()
+                .hash_length(12)
+                .hash(&render.output.as_bytes());
+            let hash_string = Base64Url::encode_string(hash.as_bytes());
+            let filename = format!("{}.html", hash_string);
             let path = build_config.output_perma_dir_path.clone();
             (filename, path)
         }
