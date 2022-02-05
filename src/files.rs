@@ -15,8 +15,26 @@ pub(crate) enum Error {
         glob: String,
     },
 
+    #[error("Couldn't strip path: '{path}'")]
+    PathStripError {
+        source: StripPrefixError,
+        path: PathBuf,
+    },
+
     #[error("Couldn't find a diff from '{from}' to '{to}'")]
     PathDiffError { from: String, to: String },
+
+    #[error("Couldn't read file at '{path}'")]
+    FileReadError { source: IoError, path: String },
+
+    #[error("Couldn't write file at '{path}'")]
+    FileWriteError { source: IoError, path: String },
+
+    #[error("Coudln't create directory at '{path:?}'")]
+    CreateDirectoryError {
+        source: std::io::Error,
+        path: String,
+    },
 
     #[error("Expected file '{path:?}' to exist")]
     MissingFileError { path: String },
@@ -24,6 +42,7 @@ pub(crate) enum Error {
     #[error("Expected directory '{path:?}' to exist")]
     MissingDirectoryError { path: String },
 }
+
 pub(crate) fn get_stripped_base_path_string(
     file_path: impl AsRef<Path>,
     base_path: impl AsRef<Path>,
@@ -65,6 +84,7 @@ pub(crate) fn get_paths_from_glob(pattern: &String) -> Result<Vec<PathBuf>, Erro
 
     Ok(paths)
 }
+
 pub(crate) fn expect_file(path: impl AsRef<Path>) -> Result<(), Error> {
     if !path.as_ref().exists() {
         return Err(Error::MissingFileError {
@@ -81,14 +101,49 @@ pub(crate) fn expect_directory(path: impl AsRef<Path>) -> Result<(), Error> {
     }
     Ok(())
 }
-pub(crate) fn ensure_directory(path: impl AsRef<Path>) -> Result<(), IoError> {
-    fs::create_dir_all(&path)
+pub(crate) fn ensure_directory(path: impl AsRef<Path>) -> Result<(), Error> {
+    fs::create_dir_all(&path).map_err(|e| Error::CreateDirectoryError {
+        source: e,
+        path: path_to_string(path),
+    })?;
+
+    Ok(())
 }
-pub(crate) fn read_file_contents(path: impl AsRef<Path>) -> Result<String, IoError> {
-    fs::read_to_string(path)
+
+pub(crate) fn read_file_contents(path: impl AsRef<Path>) -> Result<String, Error> {
+    let contents = fs::read_to_string(&path).map_err(|e| Error::FileReadError {
+        source: e,
+        path: path_to_string(path),
+    })?;
+    Ok(contents)
 }
-pub(crate) fn write_file_contents(content: &String, path: impl AsRef<Path>) -> Result<(), IoError> {
-    fs::write(path, content)
+pub(crate) fn write_file_contents(content: &String, path: impl AsRef<Path>) -> Result<(), Error> {
+    fs::write(&path, content).map_err(|e| Error::FileWriteError {
+        source: e,
+        path: path_to_string(path),
+    })?;
+    Ok(())
+}
+
+pub(crate) fn load_component_files(
+    components_glob: &String,
+    source_dir_path: &String,
+) -> Result<Vec<(String, String)>, Error> {
+    let mut components: Vec<(String, String)> = Vec::new();
+    let component_paths = get_paths_from_glob(&components_glob)?;
+    for path in component_paths {
+        let component_name =
+            get_stripped_base_path_string(&path, &source_dir_path).map_err(|e| {
+                Error::PathStripError {
+                    source: e,
+                    path: path.clone(),
+                }
+            })?;
+        let component = read_file_contents(path)?;
+        components.push((component_name, component));
+    }
+
+    Ok(components)
 }
 
 fn path_to_string(path: impl AsRef<Path>) -> String {

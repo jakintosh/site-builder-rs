@@ -1,4 +1,6 @@
-use crate::files::{get_relative_path_string, write_file_contents, Error as FilesError};
+use crate::files::{
+    get_relative_path_string, load_component_files, write_file_contents, Error as FilesError,
+};
 use crate::parsing::{wrap_content_in_template, ContentContext};
 use crate::{BuildConfig, SiteConfig};
 use base64ct::{Base64Url, Encoding};
@@ -9,16 +11,19 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub(crate) enum Error {
     #[error("Couldn't write {name}")]
-    WritePermalinkError {
-        source: std::io::Error,
-        name: String,
-    },
+    WritePermalinkError { source: FilesError, name: String },
 
     #[error("Couldn't create templating instance")]
     CreateTeraInstanceError { source: tera::Error },
 
     #[error("Couldn't create template context from data: {data}")]
     CreateTeraContextError { source: tera::Error, data: String },
+
+    #[error("Couldn't load components")]
+    ComponentLoadError { source: FilesError },
+
+    #[error("Couldn't register components with template engine")]
+    ComponentRegisterError { source: tera::Error },
 
     #[error("Couldn't determine base template for render '{name}'")]
     AmbiguousTemplateError { name: String },
@@ -37,6 +42,7 @@ pub(crate) struct Renderer<'a> {
     pub site_config: &'a SiteConfig,
 }
 
+#[derive(Clone)]
 pub(crate) enum RenderDestination {
     Explicit { path: String, filename: String },
     Permalink,
@@ -54,6 +60,11 @@ pub(crate) struct Render {
     pub output: String,
 }
 
+pub(crate) struct Export {
+    pub render: Render,
+    pub path: String,
+}
+
 impl<'a> Renderer<'a> {
     pub(crate) fn new(
         build_config: &'a BuildConfig,
@@ -65,7 +76,7 @@ impl<'a> Renderer<'a> {
             println!("Loading templates from '{}'", &build_config.templates_glob);
             println!("");
         }
-        let template_engine = tera::Tera::new(&build_config.templates_glob)
+        let mut template_engine = tera::Tera::new(&build_config.templates_glob)
             .map_err(|e| Error::CreateTeraInstanceError { source: e })?;
         if log {
             println!("Loaded templates:");
@@ -74,6 +85,27 @@ impl<'a> Renderer<'a> {
             }
             println!("");
         }
+
+        if log {
+            println!(
+                "Loading components from '{}'",
+                &build_config.components_glob
+            );
+            println!("");
+        }
+        let components =
+            load_component_files(&build_config.components_glob, &build_config.source_dir_path)
+                .map_err(|e| Error::ComponentLoadError { source: e })?;
+        if log {
+            println!("Loaded components:");
+            for (name, _) in &components {
+                println!("  - \"{}\"", name)
+            }
+            println!("");
+        }
+        template_engine
+            .add_raw_templates(components)
+            .map_err(|e| Error::ComponentRegisterError { source: e })?;
 
         let base_context = tera::Context::from_serialize(&site_config.context).map_err(|e| {
             Error::CreateTeraContextError {
@@ -96,7 +128,10 @@ impl<'a> Renderer<'a> {
             site_config,
         })
     }
-    pub(crate) fn render(&mut self, pass_descriptor: RenderPassDescriptor) -> Result<(), Error> {
+    pub(crate) fn render(
+        &mut self,
+        pass_descriptor: RenderPassDescriptor,
+    ) -> Result<Export, Error> {
         let log = self.build_config.debug;
 
         // figure out destination and base url
@@ -155,22 +190,19 @@ impl<'a> Renderer<'a> {
             .template_engine
             .render(&pass_descriptor.render_name, &render_context)
             .map_err(|e| Error::RenderError { source: e })?;
+        let render = Render {
+            pass_descriptor,
+            output,
+        };
 
-        // export
-        export(
-            Render {
-                pass_descriptor,
-                output,
-            },
-            self.build_config,
-        )?;
+        let export = export(render, self.build_config)?;
 
-        Ok(())
+        Ok(export)
     }
 }
 
-fn export(render: Render, build_config: &BuildConfig) -> Result<(), Error> {
-    let (filename, path) = match render.pass_descriptor.destination {
+fn export(render: Render, build_config: &BuildConfig) -> Result<Export, Error> {
+    let (filename, path) = match render.pass_descriptor.destination.clone() {
         RenderDestination::Explicit { path, filename } => (filename, path),
         RenderDestination::Permalink => {
             let hash = Params::new()
@@ -195,7 +227,7 @@ fn export(render: Render, build_config: &BuildConfig) -> Result<(), Error> {
         );
     }
 
-    Ok(())
+    Ok(Export { render, path })
 }
 
 #[cfg(test)]

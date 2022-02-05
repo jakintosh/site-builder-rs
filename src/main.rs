@@ -15,6 +15,7 @@ use crate::parsing::{parse_supported_file, parse_toml_file, SiteContentType, Sit
 use crate::rendering::{RenderDestination, RenderPassDescriptor, Renderer};
 use anyhow::{Context, Result};
 use clap::Parser;
+use rendering::Export;
 use std::collections::HashMap;
 
 #[derive(Parser)]
@@ -49,6 +50,7 @@ struct BuildConfig {
     css_dir_path: String,
     output_perma_dir_path: String,
     templates_glob: String,
+    components_glob: String,
     content_md_glob: String,
     content_html_glob: String,
 }
@@ -88,6 +90,7 @@ fn create_build_config(args: Args) -> Result<BuildConfig> {
         .context(r"Couldn't create {out}/permalink directory")?;
 
     let templates_glob = format!("{src}/templates/**/*.tmpl", src = source_dir_path);
+    let components_glob = format!("{src}/components/**/*", src = source_dir_path);
     let content_md_glob = format!("{cnt}/**/*.md", cnt = content_dir_path);
     let content_html_glob = format!("{cnt}/**/*.html", cnt = content_dir_path);
 
@@ -100,6 +103,7 @@ fn create_build_config(args: Args) -> Result<BuildConfig> {
         css_dir_path,
         output_perma_dir_path,
         templates_glob,
+        components_glob,
         content_md_glob,
         content_html_glob,
     })
@@ -141,6 +145,7 @@ fn main() -> Result<()> {
         .context("Failed to create a site html renderer")?;
 
     // render all content
+    let mut exports: Vec<Export> = Vec::new();
     let md_paths = get_paths_from_glob(&build_config.content_md_glob)
         .context("Failed to resolve markdown glob")?;
     let html_paths = get_paths_from_glob(&build_config.content_html_glob)
@@ -164,10 +169,14 @@ fn main() -> Result<()> {
             html,
             destination: RenderDestination::Permalink,
         };
-        renderer
+        let export = renderer
             .render(rpd)
             .context(format!("Failed to render content '{}'", render_name))?;
+        exports.push(export);
     }
+
+    // go through all the exports, and insert each export into the
+    // tera::Context depending on its content type
 
     // process our sections to build a site graph
     for section in &site_config.context.sections {
@@ -190,7 +199,7 @@ fn main() -> Result<()> {
         let (context, html) = match parse_supported_file(index_content_path)
             .context("Failed to load section index file")?
         {
-            Some((content, html)) => (content, html),
+            Some((context, html)) => (context, html),
             None => continue,
         };
 

@@ -1,4 +1,4 @@
-use crate::files::read_file_contents;
+use crate::files::{read_file_contents, Error as FilesError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
@@ -7,19 +7,21 @@ use toml;
 #[derive(Debug, Error)]
 pub(crate) enum Error {
     #[error("Couldn't load toml")]
-    TomlLoadError { source: std::io::Error },
+    TomlLoadError { source: FilesError },
 
     #[error("Couldn't parse toml")]
     TomlParseError { source: toml::de::Error },
 
     #[error("Couldn't load content")]
-    ContentLoadError { source: std::io::Error },
+    ContentLoadError { source: FilesError },
 }
 
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
 pub(crate) struct ContentContext {
     pub content_type: Option<String>,
     pub content_title: Option<String>,
+    pub published_date: Option<String>,
+    pub updated_date: Option<String>,
     pub data_type: Option<String>,
 }
 
@@ -30,6 +32,12 @@ impl ContentContext {
         }
         if let Some(content_title) = &self.content_title {
             tera_context.insert("content_title", content_title);
+        }
+        if let Some(published_date) = &self.published_date {
+            tera_context.insert("published_date", published_date);
+        }
+        if let Some(updated_date) = &self.updated_date {
+            tera_context.insert("updated_date", updated_date);
         }
         if let Some(data_type) = &self.data_type {
             tera_context.insert("data_type", data_type);
@@ -195,6 +203,8 @@ mod tests {
             ContentContext {
                 content_title: Some("title".to_owned()),
                 content_type: Some("post".to_owned()),
+                published_date: Some("pub date".to_owned()),
+                updated_date: Some("pub date".to_owned()),
                 data_type: None,
             }
         );
@@ -205,6 +215,8 @@ mod tests {
         let frontmatter = ContentContext {
             content_title: Some("title".to_owned()),
             content_type: Some("post".to_owned()),
+            published_date: Some("pub date".to_owned()),
+            updated_date: Some("pub date".to_owned()),
             data_type: None,
         };
         let frontmatter_json =
