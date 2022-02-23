@@ -1,11 +1,10 @@
 use crate::files::{
     get_relative_path_string, load_component_files, write_file_contents, Error as FilesError,
 };
-use crate::parsing::{wrap_content_in_template, ContentContext};
 use crate::{BuildConfig, SiteConfig};
 use base64ct::{Base64Url, Encoding};
 use blake2s_simd::Params;
-use std::fmt::Debug;
+use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,8 +15,8 @@ pub(crate) enum Error {
     #[error("Couldn't create templating instance")]
     CreateTeraInstanceError { source: tera::Error },
 
-    #[error("Couldn't create template context from data: {data}")]
-    CreateTeraContextError { source: tera::Error, data: String },
+    #[error("Couldn't create template context")]
+    CreateTeraContextError { source: tera::Error },
 
     #[error("Couldn't load components")]
     ComponentLoadError { source: FilesError },
@@ -25,11 +24,8 @@ pub(crate) enum Error {
     #[error("Couldn't register components with template engine")]
     ComponentRegisterError { source: tera::Error },
 
-    #[error("Couldn't determine base template for render '{name}'")]
-    AmbiguousTemplateError { name: String },
-
-    #[error("Couldn't determine a destination for render '{name}'")]
-    AmbiguousDestinationError { source: FilesError, name: String },
+    #[error("Couldn't determine a render destination")]
+    AmbiguousDestinationError { source: FilesError },
 
     #[error("Template engine error during render")]
     RenderError { source: tera::Error },
@@ -39,29 +35,23 @@ pub(crate) struct Renderer<'a> {
     pub template_engine: tera::Tera,
     pub base_context: tera::Context,
     pub build_config: &'a BuildConfig,
-    pub site_config: &'a SiteConfig,
 }
 
 #[derive(Clone)]
 pub(crate) enum RenderDestination {
-    Explicit { path: String, filename: String },
-    Permalink,
+    SectionIndex { output_directory: String },
+    Permalink { directory: String },
 }
 
-pub(crate) struct RenderPassDescriptor {
+pub(crate) struct RenderPassDescriptor<T: Serialize> {
     pub render_name: String,
-    pub content_context: Option<ContentContext>,
-    pub html: String,
+    pub base_template: &'static str,
     pub destination: RenderDestination,
-}
-
-pub(crate) struct Render {
-    pub pass_descriptor: RenderPassDescriptor,
-    pub output: String,
+    pub context: T,
 }
 
 pub(crate) struct Export {
-    pub render: Render,
+    pub render_name: String,
     pub path: String,
 }
 
@@ -72,11 +62,11 @@ impl<'a> Renderer<'a> {
     ) -> Result<Renderer<'a>, Error> {
         let log = build_config.debug;
 
+        let templ_glob = &build_config.templates_glob;
         if log {
-            println!("Loading templates from '{}'", &build_config.templates_glob);
-            println!("");
+            println!("Loading templates from '{}'\n", templ_glob);
         }
-        let mut template_engine = tera::Tera::new(&build_config.templates_glob)
+        let mut template_engine = tera::Tera::new(templ_glob)
             .map_err(|e| Error::CreateTeraInstanceError { source: e })?;
         if log {
             println!("Loaded templates:");
@@ -86,16 +76,12 @@ impl<'a> Renderer<'a> {
             println!("");
         }
 
+        let comp_glob = &build_config.components_glob;
         if log {
-            println!(
-                "Loading components from '{}'",
-                &build_config.components_glob
-            );
-            println!("");
+            println!("Loading components from '{}'\n", comp_glob);
         }
-        let components =
-            load_component_files(&build_config.components_glob, &build_config.source_dir_path)
-                .map_err(|e| Error::ComponentLoadError { source: e })?;
+        let components = load_component_files(comp_glob, &build_config.source_dir_path)
+            .map_err(|e| Error::ComponentLoadError { source: e })?;
         if log {
             println!("Loaded components:");
             for (name, _) in &components {
@@ -107,12 +93,11 @@ impl<'a> Renderer<'a> {
             .add_raw_templates(components)
             .map_err(|e| Error::ComponentRegisterError { source: e })?;
 
-        let base_context = tera::Context::from_serialize(&site_config.context).map_err(|e| {
-            Error::CreateTeraContextError {
-                source: e,
-                data: format!("{:?}", &site_config.context),
-            }
-        })?;
+        let mut base_context = tera::Context::from_serialize(&site_config.context)
+            .map_err(|e| Error::CreateTeraContextError { source: e })?;
+        base_context.insert("posts", &site_config.posts);
+        base_context.insert("pages", &site_config.pages);
+
         if log {
             println!("Loaded base context:");
             for value in base_context.clone().into_json().as_object().unwrap() {
@@ -125,113 +110,98 @@ impl<'a> Renderer<'a> {
             template_engine,
             base_context,
             build_config,
-            site_config,
         })
     }
-    pub(crate) fn render(
-        &mut self,
-        pass_descriptor: RenderPassDescriptor,
-    ) -> Result<Export, Error> {
-        let log = self.build_config.debug;
 
-        // figure out destination and base url
-        let destination = match &pass_descriptor.destination {
-            RenderDestination::Explicit { path, .. } => path,
-            RenderDestination::Permalink => &self.build_config.output_perma_dir_path,
+    pub(crate) fn register_post_url(&mut self, name: &str, url: String) {
+        self.register_url("posts", name, url);
+    }
+    pub(crate) fn register_page_url(&mut self, name: &str, url: String) {
+        self.register_url("pages", name, url);
+    }
+
+    fn register_url(&mut self, container_name: &str, name: &str, url: String) {
+        let mut context = self.base_context.clone().into_json();
+        let container = context
+            .get_mut(container_name)
+            .expect("uhhhh")
+            .as_object_mut()
+            .expect("uuuh");
+        let element = container
+            .get_mut(name)
+            .expect("uhhh")
+            .as_object_mut()
+            .expect("uhh");
+        element.insert(String::from("url"), serde_json::Value::String(url));
+        self.base_context = tera::Context::from_value(context).expect("uhh");
+    }
+
+    pub(crate) fn render_content<T: Serialize>(
+        &mut self,
+        desc: RenderPassDescriptor<T>,
+    ) -> Result<Export, Error> {
+        let destination = match &desc.destination {
+            RenderDestination::SectionIndex {
+                output_directory: directory,
+                ..
+            } => directory,
+            RenderDestination::Permalink { directory } => directory,
         };
         let base_url = get_relative_path_string(&self.build_config.output_dir_path, destination)
-            .map_err(|e| Error::AmbiguousDestinationError {
-                source: e,
-                name: pass_descriptor.render_name.clone(),
-            })?;
+            .map_err(|e| Error::AmbiguousDestinationError { source: e })?;
 
-        // create render context
-        let mut base_context = self.base_context.clone();
-        base_context.insert("base_url", &base_url);
-        let render_context = match &pass_descriptor.content_context {
-            Some(context) => {
-                context.extend_context(&mut base_context);
+        // create context for render
+        let mut context = self.base_context.clone();
+        context.insert("base_url", &base_url);
+        context.insert("render", &desc.context);
 
-                base_context
-            }
-            None => base_context,
-        };
-
-        // get base template name
-        let content_type = match render_context.get("content_type") {
-            Some(tera::Value::String(content_type)) => content_type,
-            _ => &self.site_config.context.content_type,
-        };
-        let base_template_name = match self.site_config.content_types.get(content_type) {
-            Some(base_template) => &base_template.content_template,
-            None => {
-                return Err(Error::AmbiguousTemplateError {
-                    name: pass_descriptor.render_name.clone(),
-                })
-            }
-        };
-
-        if log {
-            println!(
-                "Rendering '{}' from base template '{}'",
-                &pass_descriptor.render_name, &base_template_name
-            );
-            println!("  Rendered with context:");
-            for value in render_context.clone().into_json().as_object().unwrap() {
-                println!("    - {} = {}", value.0, value.1);
-            }
-        }
-
-        let template = wrap_content_in_template(&pass_descriptor.html, &base_template_name);
-        self.template_engine
-            .add_raw_template(&pass_descriptor.render_name, &template)
-            .map_err(|e| Error::RenderError { source: e })?;
+        // render
+        print!("rendering '{}'...", &desc.render_name);
         let output = self
             .template_engine
-            .render(&pass_descriptor.render_name, &render_context)
+            .render(&desc.base_template, &context)
             .map_err(|e| Error::RenderError { source: e })?;
-        let render = Render {
-            pass_descriptor,
-            output,
-        };
 
-        let export = export(render, self.build_config)?;
+        // 2nd render to resolve component includes
+        let output = self
+            .template_engine
+            .render_str(&output, &context)
+            .map_err(|e| Error::RenderError { source: e })?;
+
+        print!("ok\n");
+
+        // export
+        let export = export(&desc.render_name, &output, desc.destination)?;
 
         Ok(export)
     }
 }
 
-fn export(render: Render, build_config: &BuildConfig) -> Result<Export, Error> {
-    let (filename, path) = match render.pass_descriptor.destination.clone() {
-        RenderDestination::Explicit { path, filename } => (filename, path),
-        RenderDestination::Permalink => {
-            let hash = Params::new()
-                .hash_length(12)
-                .hash(&render.output.as_bytes());
+fn export(
+    name: &String,
+    content: &String,
+    destination: RenderDestination,
+) -> Result<Export, Error> {
+    let (filename, path) = match destination {
+        RenderDestination::SectionIndex {
+            output_directory: directory,
+        } => (String::from("index.html"), directory),
+        RenderDestination::Permalink { directory } => {
+            let hash = Params::new().hash_length(12).hash(&content.as_bytes());
             let hash_string = Base64Url::encode_string(hash.as_bytes());
             let filename = format!("{}.html", hash_string);
-            let path = build_config.output_perma_dir_path.clone();
-            (filename, path)
+            (filename, directory)
         }
     };
     let path = format!("{}/{}", path, filename);
-    write_file_contents(&render.output, &path).map_err(|e| Error::WritePermalinkError {
+    println!("exporting {} -> {}", name, path);
+    write_file_contents(&content, &path).map_err(|e| Error::WritePermalinkError {
         source: e,
-        name: render.pass_descriptor.render_name.clone(),
+        name: name.clone(),
     })?;
 
-    if build_config.debug {
-        println!(
-            "Exported rendered '{}' to {:?}\n",
-            &render.pass_descriptor.render_name, &path
-        );
-    }
-
-    Ok(Export { render, path })
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test() {}
+    Ok(Export {
+        render_name: name.clone(),
+        path,
+    })
 }

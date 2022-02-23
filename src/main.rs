@@ -11,11 +11,11 @@ mod parsing;
 mod rendering;
 
 use crate::files::*;
-use crate::parsing::{parse_supported_file, parse_toml_file, SiteContentType, SiteContext};
-use crate::rendering::{RenderDestination, RenderPassDescriptor, Renderer};
+use crate::parsing::{parse_blocks_file, parse_json_file, Content, Page, Post, SiteContext};
+use crate::rendering::{RenderDestination, Renderer};
 use anyhow::{Context, Result};
 use clap::Parser;
-use rendering::Export;
+use rendering::RenderPassDescriptor;
 use std::collections::HashMap;
 
 #[derive(Parser)]
@@ -32,7 +32,7 @@ struct Args {
     #[clap(short, long)]
     destination: String,
 
-    /// Path to config.toml file
+    /// Path to config.json file
     #[clap(short, long)]
     config: Option<String>,
 
@@ -44,23 +44,23 @@ struct Args {
 struct BuildConfig {
     debug: bool,
     source_dir_path: String,
-    config_file_path: String,
     output_dir_path: String,
+    config_file_path: String,
     content_dir_path: String,
     css_dir_path: String,
     output_perma_dir_path: String,
-    templates_glob: String,
+    content_glob: String,
     components_glob: String,
-    content_md_glob: String,
-    content_html_glob: String,
+    templates_glob: String,
 }
 
 struct SiteConfig {
-    content_types: HashMap<String, SiteContentType>,
     context: SiteContext,
+    posts: HashMap<String, Post>,
+    pages: HashMap<String, Page>,
 }
 
-static DEFAULT_CONFIG_PATH: &str = "config.toml";
+static DEFAULT_CONFIG_PATH: &str = "config.json";
 
 fn create_build_config(args: Args) -> Result<BuildConfig> {
     let source_dir_path = args.source;
@@ -77,7 +77,7 @@ fn create_build_config(args: Args) -> Result<BuildConfig> {
             cfg = DEFAULT_CONFIG_PATH
         ),
     };
-    expect_file(&config_file_path).context("Missing expected config.toml file")?;
+    expect_file(&config_file_path).context("Missing expected config.json file")?;
 
     let content_dir_path = format!("{src}/content", src = source_dir_path);
     expect_directory(&content_dir_path).context(r"Missing expected {src}/content directory")?;
@@ -89,10 +89,9 @@ fn create_build_config(args: Args) -> Result<BuildConfig> {
     ensure_directory(&output_perma_dir_path)
         .context(r"Couldn't create {out}/permalink directory")?;
 
+    let content_glob = format!("{cnt}/**/*.*", cnt = content_dir_path);
     let templates_glob = format!("{src}/templates/**/*.tmpl", src = source_dir_path);
     let components_glob = format!("{src}/components/**/*", src = source_dir_path);
-    let content_md_glob = format!("{cnt}/**/*.md", cnt = content_dir_path);
-    let content_html_glob = format!("{cnt}/**/*.html", cnt = content_dir_path);
 
     Ok(BuildConfig {
         debug: args.debug,
@@ -102,28 +101,26 @@ fn create_build_config(args: Args) -> Result<BuildConfig> {
         content_dir_path,
         css_dir_path,
         output_perma_dir_path,
+        content_glob,
         templates_glob,
         components_glob,
-        content_md_glob,
-        content_html_glob,
     })
 }
 
-fn create_site_config(path: impl AsRef<std::path::Path>) -> Result<SiteConfig> {
+fn create_site_config(
+    path: impl AsRef<std::path::Path>,
+    pages: HashMap<String, Page>,
+    posts: HashMap<String, Post>,
+) -> Result<SiteConfig> {
     let raw_context: SiteContext =
-        parse_toml_file(path).context("Couldn't load config.toml file")?;
+        parse_json_file(path).context("Couldn't load config.json file")?;
 
     let context = raw_context.clone();
 
-    let content_types: HashMap<String, SiteContentType> = raw_context
-        .content_types
-        .into_iter()
-        .map(|c| (c.name.clone(), c))
-        .collect();
-
     Ok(SiteConfig {
-        content_types,
         context,
+        pages,
+        posts,
     })
 }
 
@@ -134,85 +131,90 @@ fn main() -> Result<()> {
         println!("\n================== Begin Site Builder ==================\n");
     }
 
-    // build config structs
+    // build config struct
     let build_config = create_build_config(args)
         .context("Failed to create a build configuration from CLI args")?;
-    let site_config = create_site_config(&build_config.config_file_path)
+
+    // load all content
+    let mut posts: HashMap<String, Post> = HashMap::new();
+    let mut pages: HashMap<String, Page> = HashMap::new();
+    let content_paths = get_paths_from_glob(&build_config.content_glob)
+        .context("Failed to resolve content path glob")?;
+    for path in content_paths {
+        let content_name = get_stripped_base_path_string(&path, &build_config.content_dir_path)
+            .context("Failed to strip content path prefix")?;
+
+        match parse_blocks_file(&path)
+            .context(format!("Failed to parse block file: {:?}", &path))?
+        {
+            Content::Post(post) => {
+                posts.insert(content_name, post);
+            }
+            Content::Page(page) => {
+                pages.insert(content_name, page);
+            }
+        };
+    }
+
+    // build site config
+    let site_config = create_site_config(&build_config.config_file_path, pages, posts)
         .context("Failed to create a site configuration from config file")?;
 
     // create renderer
     let mut renderer = Renderer::new(&build_config, &site_config)
-        .context("Failed to create a site html renderer")?;
+        .context("Failed to create a site template renderer")?;
 
-    // render all content
-    let mut exports: Vec<Export> = Vec::new();
-    let md_paths = get_paths_from_glob(&build_config.content_md_glob)
-        .context("Failed to resolve markdown glob")?;
-    let html_paths = get_paths_from_glob(&build_config.content_html_glob)
-        .context("Failed to resolve html glob")?;
-    let paths: Vec<_> = vec![md_paths, html_paths].into_iter().flatten().collect();
-    for path in paths {
-        let render_name = get_stripped_base_path_string(&path, &build_config.content_dir_path)
-            .context("Failed to strip content path prefix")?;
-        let (context, html) = match parse_supported_file(&path)
-            .context("Failed to parse content file for rendering")?
-        {
-            Some((content, html)) => (content, html),
-            None => {
-                println!("Didn't render unexpected '/content' file {:?}", path);
-                continue;
-            }
+    // render posts
+    for (name, post) in &site_config.posts {
+        // describe the render pass
+        let desc = RenderPassDescriptor {
+            render_name: name.clone(),
+            base_template: "post.tmpl",
+            context: &post,
+            destination: RenderDestination::Permalink {
+                directory: build_config.output_perma_dir_path.clone(),
+            },
         };
-        let rpd = RenderPassDescriptor {
-            render_name: render_name.clone(),
-            content_context: context,
-            html,
-            destination: RenderDestination::Permalink,
-        };
+
+        // render, get export info
         let export = renderer
-            .render(rpd)
-            .context(format!("Failed to render content '{}'", render_name))?;
-        exports.push(export);
+            .render_content(desc)
+            .context(format!("Failed to render '{}'", &name))?;
+
+        // add the exported url to the renderer context
+        let site_path = get_stripped_base_path_string(export.path, &build_config.output_dir_path)
+            .context(format!(
+            "couldn't get site-scoped path from export.path for '{}'",
+            export.render_name
+        ))?;
+        renderer.register_post_url(&export.render_name, site_path);
     }
 
-    // go through all the exports, and insert each export into the
-    // tera::Context depending on its content type
-
-    // process our sections to build a site graph
+    // render sections
     for section in &site_config.context.sections {
-        if build_config.debug {
-            println!("Building section '{}'", section.name);
-        }
-        let index_content_name = section.index_content.clone();
-        let index_content_path = std::path::PathBuf::from(format!(
-            "{}/{}",
-            &build_config.source_dir_path, &index_content_name
-        ));
         // build the directory for this section
         let section_path = format!("{}/{}", build_config.output_dir_path, section.site_path);
         ensure_directory(&section_path).context(format!(
             "Couldn't ensure required sitemap directory '{}'",
             section.site_path,
         ))?;
-
-        // render the index content page
-        let (context, html) = match parse_supported_file(index_content_path)
-            .context("Failed to load section index file")?
-        {
-            Some((context, html)) => (context, html),
-            None => continue,
-        };
-
-        let rpd = RenderPassDescriptor {
-            render_name: index_content_name,
-            content_context: context,
-            html,
-            destination: RenderDestination::Explicit {
-                path: section_path.clone(),
-                filename: String::from("index.html"),
+        let desc = RenderPassDescriptor {
+            render_name: section.index_content.clone(),
+            base_template: "content.tmpl",
+            destination: RenderDestination::SectionIndex {
+                output_directory: section_path,
             },
+            context: site_config
+                .pages
+                .get(&section.index_content)
+                .expect(&format!(
+                    "Missing index page for section '{}'",
+                    section.name
+                )),
         };
-        let _render = renderer.render(rpd)?;
+        renderer
+            .render_content(desc)
+            .context(format!("Failed to render section '{}'", &section.name))?;
     }
 
     // copy over css

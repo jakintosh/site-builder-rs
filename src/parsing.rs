@@ -1,57 +1,38 @@
+mod blocks;
+
 use crate::files::{read_file_contents, Error as FilesError};
+use blocks::Blocks;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json;
 use std::path::Path;
 use thiserror::Error;
-use toml;
 
 #[derive(Debug, Error)]
 pub(crate) enum Error {
-    #[error("Couldn't load toml")]
-    TomlLoadError { source: FilesError },
-
-    #[error("Couldn't parse toml")]
-    TomlParseError { source: toml::de::Error },
-
     #[error("Couldn't load content")]
     ContentLoadError { source: FilesError },
+
+    #[error("Couldn't load json")]
+    JsonLoadError { source: FilesError },
+
+    #[error("Couldn't parse json")]
+    JsonParseError { source: serde_json::Error },
+
+    #[error("Block header was malformed: '{reason}'")]
+    MalformedBlockHeaderError { reason: String },
+
+    #[error("Block content was malformed: '{reason}'")]
+    MalformedBlockContentError { reason: String },
 }
 
-#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
-pub(crate) struct ContentContext {
-    pub content_type: Option<String>,
-    pub content_title: Option<String>,
-    pub published_date: Option<String>,
-    pub updated_date: Option<String>,
-    pub data_type: Option<String>,
-}
-
-impl ContentContext {
-    pub(crate) fn extend_context(&self, tera_context: &mut tera::Context) {
-        if let Some(content_type) = &self.content_type {
-            tera_context.insert("content_type", content_type);
-        }
-        if let Some(content_title) = &self.content_title {
-            tera_context.insert("content_title", content_title);
-        }
-        if let Some(published_date) = &self.published_date {
-            tera_context.insert("published_date", published_date);
-        }
-        if let Some(updated_date) = &self.updated_date {
-            tera_context.insert("updated_date", updated_date);
-        }
-        if let Some(data_type) = &self.data_type {
-            tera_context.insert("data_type", data_type);
-        }
-    }
-}
+///
+/// Site Context Structs
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub(crate) struct SiteContext {
     pub site_title: String,
     pub language_code: String,
-    pub content_type: String,
     pub sections: Vec<SiteSection>,
-    pub content_types: Vec<SiteContentType>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -68,233 +49,179 @@ pub struct SiteContentType {
     pub content_template: String,
 }
 
-pub(crate) fn parse_toml_string<T: DeserializeOwned>(toml_str: &str) -> Result<T, Error> {
-    toml::from_str(&toml_str).map_err(|e| Error::TomlParseError { source: e })
-}
+///
+/// Content Structs
 
-pub(crate) fn parse_toml_file<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<T, Error> {
-    let file_contents = read_file_contents(path).map_err(|e| Error::TomlLoadError { source: e })?;
-    parse_toml_string::<T>(&file_contents)
+#[derive(Serialize, Debug)]
+pub(crate) struct JsonString {
+    content: String,
 }
+impl TryFrom<JsonString> for serde_json::Value {
+    type Error = Error;
 
-pub(crate) fn parse_supported_file(
-    path: impl AsRef<std::path::Path>,
-) -> Result<Option<(Option<ContentContext>, String)>, Error> {
-    match path.as_ref().extension() {
-        Some(ext) if ext == "md" => Ok(Some(parse_markdown_file(&path)?)),
-        Some(ext) if ext == "html" => Ok(Some(parse_html_file(&path)?)),
-        _ => Ok(None),
+    fn try_from(json: JsonString) -> Result<Self, Self::Error> {
+        let json: serde_json::Value = serde_json::from_str(json.content.as_str())
+            .map_err(|e| Error::JsonParseError { source: e })?;
+        Ok(json)
     }
 }
 
-pub(crate) fn parse_html_file<T: DeserializeOwned>(
-    path: impl AsRef<Path>,
-) -> Result<(Option<T>, String), Error> {
-    Ok(parse_content_file(path)?)
+#[derive(Serialize, Debug)]
+pub(crate) struct MarkdownString {
+    content: String,
 }
-
-pub(crate) fn parse_markdown_file<T: DeserializeOwned>(
-    path: impl AsRef<Path>,
-) -> Result<(Option<T>, String), Error> {
-    let (frontmatter, markdown) = parse_content_file(path)?;
-
-    Ok((frontmatter, convert_markdown_to_html(&markdown)))
-}
-
-pub(crate) fn split_frontmatter_content<T: DeserializeOwned>(
-    text: &String,
-) -> Result<(Option<T>, String), Error> {
-    enum State {
-        WaitingForFrontmatter,
-        IngestingFrontmatter,
-        IngestingContent,
+impl From<MarkdownString> for serde_json::Value {
+    fn from(markdown: MarkdownString) -> Self {
+        serde_json::Value::String(markdown.content)
     }
-    let mut state = State::WaitingForFrontmatter;
-    let mut ingest = String::new();
-    let mut frontmatter: Option<String> = None;
-    let content: String;
-    let mut lines = text.lines();
-    while let Some(line) = lines.next() {
-        let mut should_ingest = false;
-        state = match state {
-            State::WaitingForFrontmatter => match line {
-                "---" => State::IngestingFrontmatter,
-                _ => {
-                    should_ingest = true;
+}
 
-                    State::IngestingContent
-                }
-            },
-            State::IngestingFrontmatter => match line {
-                "---" => {
-                    frontmatter = Some(ingest.clone());
-                    ingest.clear();
+#[derive(Serialize, Debug)]
+pub(crate) struct HtmlString {
+    content: String,
+}
+impl From<MarkdownString> for HtmlString {
+    fn from(markdown: MarkdownString) -> Self {
+        let mut html = String::new();
+        let parser = pulldown_cmark::Parser::new(&markdown.content);
+        pulldown_cmark::html::push_html(&mut html, parser);
 
-                    State::IngestingContent
-                }
-                _ => {
-                    should_ingest = true;
+        HtmlString { content: html }
+    }
+}
+impl From<HtmlString> for serde_json::Value {
+    fn from(html: HtmlString) -> Self {
+        serde_json::Value::String(html.content)
+    }
+}
 
-                    State::IngestingFrontmatter
-                }
-            },
-            State::IngestingContent => {
-                should_ingest = true;
+pub(crate) enum Content {
+    Post(Post),
+    Page(Page),
+}
 
-                State::IngestingContent
-            }
-        };
-        if should_ingest {
-            ingest.push_str(line);
-            ingest.push_str("\n");
+#[derive(Deserialize)]
+pub(crate) struct PostOption {
+    metadata: MetadataOption,
+    title: String,
+    content: String,
+}
+#[derive(Serialize)]
+pub(crate) struct Post {
+    metadata: Metadata,
+    title: String,
+    html: String,
+}
+impl TryFrom<serde_json::Value> for Post {
+    type Error = Error;
+
+    fn try_from(json: serde_json::Value) -> Result<Self, Self::Error> {
+        let post_opt = serde_json::from_value::<PostOption>(json)
+            .map_err(|e| Error::JsonParseError { source: e })?;
+        Ok(post_opt.into())
+    }
+}
+impl From<PostOption> for Post {
+    fn from(option: PostOption) -> Self {
+        Post {
+            metadata: option.metadata.into(),
+            title: option.title,
+            html: option.content,
         }
     }
+}
 
-    // assign remaining ingest to content
-    content = ingest;
+#[derive(Deserialize)]
+pub(crate) struct PageOption {
+    metadata: MetadataOption,
+    title: String,
+    content: String,
+}
+#[derive(Serialize)]
+pub(crate) struct Page {
+    metadata: Metadata,
+    title: String,
+    html: String,
+}
+impl TryFrom<serde_json::Value> for Page {
+    type Error = Error;
 
-    let frontmatter_struct = match frontmatter {
-        Some(frontmatter) => Some(parse_toml_string::<T>(&frontmatter)?),
-        None => None,
+    fn try_from(json: serde_json::Value) -> Result<Self, Self::Error> {
+        let page_opt = serde_json::from_value::<PageOption>(json)
+            .map_err(|e| Error::JsonParseError { source: e })?;
+        Ok(page_opt.into())
+    }
+}
+impl From<PageOption> for Page {
+    fn from(option: PageOption) -> Self {
+        Page {
+            metadata: option.metadata.into(),
+            title: option.title,
+            html: option.content,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MetadataOption {
+    content_name: Option<String>,
+    author_name: String,
+    published_date: String,
+    updated_date: Option<String>,
+    version: Option<u32>,
+}
+#[derive(Serialize)]
+pub(crate) struct Metadata {
+    content_name: String,
+    author_name: String,
+    published_date: String,
+    updated_date: String,
+    version: u32,
+}
+impl From<MetadataOption> for Metadata {
+    fn from(option: MetadataOption) -> Self {
+        Metadata {
+            content_name: option.content_name.unwrap_or(String::from("")),
+            author_name: option.author_name,
+            updated_date: option.updated_date.unwrap_or(option.published_date.clone()),
+            published_date: option.published_date,
+            version: option.version.unwrap_or(1),
+        }
+    }
+}
+
+pub(crate) fn parse_blocks_file(path: impl AsRef<std::path::Path>) -> Result<Content, Error> {
+    let file_contents =
+        read_file_contents(&path).map_err(|e| Error::ContentLoadError { source: e })?;
+    let (type_declaration, file_contents) = match file_contents.split_once("\n") {
+        Some(strings) => strings,
+        None => {
+            return Err(Error::MalformedBlockHeaderError {
+                reason: String::from("no newline in file"),
+            })
+        }
     };
 
-    Ok((frontmatter_struct, content))
+    // println!("\nparsing blocks\n==============\n");
+    let blocks: Blocks = file_contents.parse()?;
+    // println!("\nblocks -> json\n==============\n");
+    let json: serde_json::Value = blocks.try_into()?;
+
+    // println!("\njson -> content\n===============\n");
+    match type_declaration {
+        "type::post" => Ok(Content::Post(json["post"].clone().try_into()?)),
+        "type::page" => Ok(Content::Page(json["page"].clone().try_into()?)),
+        _ => Err(Error::MalformedBlockHeaderError {
+            reason: format!("invalid type header"),
+        }),
+    }
 }
 
-pub(crate) fn wrap_content_in_template(content: &str, base_template: &str) -> String {
-    let mut template = String::new();
-    let template_header = format!("{{% extends \"{tmpl}\" %}}\n", tmpl = base_template);
-    template.push_str(&template_header);
-    template.push_str("{% block content -%}\n");
-    template.push_str(&content);
-    template.push_str("{%- endblock content %}\n");
-
-    template
+pub(crate) fn parse_json_string<T: DeserializeOwned>(json_str: &str) -> Result<T, Error> {
+    serde_json::from_str(&json_str).map_err(|e| Error::JsonParseError { source: e })
 }
 
-fn parse_content_file<T: DeserializeOwned>(
-    path: impl AsRef<Path>,
-) -> Result<(Option<T>, String), Error> {
-    let file = read_file_contents(&path).map_err(|e| Error::ContentLoadError { source: e })?;
-    let (frontmatter, content) = split_frontmatter_content::<T>(&file)?;
-
-    Ok((frontmatter, content))
-}
-
-fn convert_markdown_to_html(markdown: &String) -> String {
-    let mut html = String::new();
-    let parser = pulldown_cmark::Parser::new(&markdown);
-    pulldown_cmark::html::push_html(&mut html, parser);
-
-    html
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_toml_string, ContentContext, SiteContentType, SiteContext, SiteSection};
-
-    #[test]
-    fn test_frontmatter_deserialize_toml() {
-        let frontmatter_toml = "content_type = \"post\"\ncontent_title = \"title\"";
-        let frontmatter: ContentContext =
-            parse_toml_string(frontmatter_toml).expect("failed to parse toml");
-        assert_eq!(
-            frontmatter,
-            ContentContext {
-                content_title: Some("title".to_owned()),
-                content_type: Some("post".to_owned()),
-                published_date: Some("pub date".to_owned()),
-                updated_date: Some("pub date".to_owned()),
-                data_type: None,
-            }
-        );
-    }
-
-    #[test]
-    fn test_frontmatter_serialize_json() {
-        let frontmatter = ContentContext {
-            content_title: Some("title".to_owned()),
-            content_type: Some("post".to_owned()),
-            published_date: Some("pub date".to_owned()),
-            updated_date: Some("pub date".to_owned()),
-            data_type: None,
-        };
-        let frontmatter_json =
-            serde_json::to_value(frontmatter).expect("failed to serialize frontmatter");
-        let content_title = frontmatter_json
-            .get("content_title")
-            .expect("couldn't get 'content_title'")
-            .as_str()
-            .expect("couldn't get string from 'content_title'");
-        let content_type = frontmatter_json
-            .get("content_type")
-            .expect("couldn't get 'content_type'")
-            .as_str()
-            .expect("couldn't get string from 'content_type'");
-        assert_eq!(content_title, "title");
-        assert_eq!(content_type, "post");
-    }
-
-    #[test]
-    fn test_site_config_deserialize_toml() {
-        let toml = r#"site_title = "jakintosh"
-language_code = "en-us"
-content_type = "post"
-
-[[sections]]
-name = "home"
-site_path = ""
-index_content = "index.html"
-priority = 1
-
-[[sections]]
-name = "posts"
-site_path = "posts/"
-index_content = "posts.html"
-priority = 2
-
-[[content_types]]
-name = "post"
-content_template = "post.tmpl""#;
-
-        let site_config: SiteContext =
-            parse_toml_string(&toml).expect("couldn't parse site config toml");
-        assert_eq!(site_config.sections.len(), 2);
-        assert_eq!(site_config.content_types.len(), 1);
-        assert_eq!(site_config.site_title, "jakintosh");
-    }
-
-    #[test]
-    fn test_site_config_serialize_json() {
-        let site_config = SiteContext {
-            site_title: "title".to_owned(),
-            language_code: "en-US".to_owned(),
-            content_type: "default.tmpl".to_owned(),
-            sections: vec![SiteSection {
-                name: "section".to_owned(),
-                site_path: "section".to_owned(),
-                index_content: "section.html".to_owned(),
-                priority: 1,
-            }],
-            content_types: vec![SiteContentType {
-                name: "post".to_owned(),
-                content_template: "post.tmpl".to_owned(),
-            }],
-        };
-        let site_config_json =
-            serde_json::to_value(site_config).expect("failed to serialize site_config");
-        let site_title = site_config_json
-            .get("site_title")
-            .expect("couldn't get 'site_title'")
-            .as_str()
-            .expect("couldn't get string from 'site_title'");
-
-        let sections = site_config_json
-            .get("sections")
-            .expect("couldn't get 'sections'")
-            .as_array()
-            .expect("couldn't get array from 'sections'");
-        assert_eq!(site_title, "title");
-        assert_eq!(sections.len(), 1);
-    }
+pub(crate) fn parse_json_file<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<T, Error> {
+    let file_contents = read_file_contents(path).map_err(|e| Error::JsonLoadError { source: e })?;
+    parse_json_string(&file_contents)
 }

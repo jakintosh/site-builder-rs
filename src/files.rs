@@ -24,6 +24,12 @@ pub(crate) enum Error {
     #[error("Couldn't find a diff from '{from}' to '{to}'")]
     PathDiffError { from: String, to: String },
 
+    #[error("Couldn't get extension from '{path}'")]
+    PathMissingExtensionError { path: String },
+
+    #[error("Couldn't read '{path}' because it's not valid unicode")]
+    PathNotUnicodeError { path: String },
+
     #[error("Couldn't read file at '{path}'")]
     FileReadError { source: IoError, path: String },
 
@@ -72,6 +78,27 @@ pub(crate) fn get_relative_path_string(
     };
 
     Ok(path_to_string(diff))
+}
+pub(crate) fn get_extension(path: impl AsRef<Path>) -> Result<String, Error> {
+    let extension = match path.as_ref().extension() {
+        Some(ext) => ext,
+        None => {
+            return Err(Error::PathMissingExtensionError {
+                path: path_to_string(path),
+            })
+        }
+    };
+
+    let extension = match extension.to_str() {
+        Some(ext) => ext,
+        None => {
+            return Err(Error::PathNotUnicodeError {
+                path: path_to_string(path),
+            })
+        }
+    };
+
+    Ok(extension.to_owned())
 }
 pub(crate) fn get_paths_from_glob(pattern: &String) -> Result<Vec<PathBuf>, Error> {
     let paths = glob(&pattern)
