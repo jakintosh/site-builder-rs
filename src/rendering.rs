@@ -76,6 +76,24 @@ impl<'a> Renderer<'a> {
             println!("");
         }
 
+        // function for (map values) -> array
+        template_engine.register_filter(
+            "values",
+            |value: &serde_json::Value,
+             _: &std::collections::HashMap<String, serde_json::Value>|
+             -> Result<serde_json::Value, tera::Error> {
+                if let serde_json::Value::Object(obj) = value {
+                    let mut values = Vec::new();
+                    for (_, value) in obj {
+                        values.push(value.clone());
+                    }
+                    Ok(serde_json::Value::Array(values))
+                } else {
+                    Err(tera::Error::call_filter("eh", "oh"))
+                }
+            },
+        );
+
         let comp_glob = &build_config.components_glob;
         if log {
             println!("Loading components from '{}'\n", comp_glob);
