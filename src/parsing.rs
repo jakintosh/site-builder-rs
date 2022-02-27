@@ -40,7 +40,6 @@ pub(crate) struct SiteSection {
     pub name: String,
     pub site_path: String,
     pub index_content: String,
-    pub priority: u8,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
