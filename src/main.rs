@@ -164,6 +164,15 @@ fn main() -> Result<()> {
     let mut renderer = Renderer::new(&build_config, &site_config)
         .context("Failed to create a site template renderer")?;
 
+    // build sitemap
+    for section in &site_config.context.sections {
+        let section_path = format!("{}/{}", build_config.output_dir_path, section.site_path);
+        ensure_directory(&section_path).context(format!(
+            "Couldn't ensure required sitemap directory '{}'",
+            section.site_path,
+        ))?;
+    }
+
     // render posts
     for (name, post) in &site_config.posts {
         // describe the render pass
@@ -171,8 +180,13 @@ fn main() -> Result<()> {
             render_name: name.clone(),
             base_template: "post.tmpl",
             context: &post,
-            destination: RenderDestination::Permalink {
-                directory: build_config.output_perma_dir_path.clone(),
+            destination: RenderDestination::Explicit {
+                directory: format!(
+                    "{}/{}",
+                    build_config.output_dir_path.clone(),
+                    post.metadata.directory.clone()
+                ),
+                filename: post.metadata.content_name.clone(),
             },
         };
 
@@ -202,7 +216,7 @@ fn main() -> Result<()> {
             render_name: section.index_content.clone(),
             base_template: "content.tmpl",
             destination: RenderDestination::SectionIndex {
-                output_directory: section_path,
+                directory: section_path,
             },
             context: site_config
                 .pages

@@ -1,5 +1,6 @@
 use crate::files::{
-    get_relative_path_string, load_component_files, write_file_contents, Error as FilesError,
+    ensure_directory, get_relative_path_string, load_component_files, write_file_contents,
+    Error as FilesError,
 };
 use crate::{BuildConfig, SiteConfig};
 use base64ct::{Base64Url, Encoding};
@@ -10,7 +11,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub(crate) enum Error {
     #[error("Couldn't write {name}")]
-    WritePermalinkError { source: FilesError, name: String },
+    WriteExportError { source: FilesError, name: String },
 
     #[error("Couldn't create templating instance")]
     CreateTeraInstanceError { source: tera::Error },
@@ -39,7 +40,8 @@ pub(crate) struct Renderer<'a> {
 
 #[derive(Clone)]
 pub(crate) enum RenderDestination {
-    SectionIndex { output_directory: String },
+    SectionIndex { directory: String },
+    Explicit { directory: String, filename: String },
     Permalink { directory: String },
 }
 
@@ -159,11 +161,9 @@ impl<'a> Renderer<'a> {
         desc: RenderPassDescriptor<T>,
     ) -> Result<Export, Error> {
         let destination = match &desc.destination {
-            RenderDestination::SectionIndex {
-                output_directory: directory,
-                ..
-            } => directory,
+            RenderDestination::SectionIndex { directory } => directory,
             RenderDestination::Permalink { directory } => directory,
+            RenderDestination::Explicit { directory, .. } => directory,
         };
         let base_url = get_relative_path_string(&self.build_config.output_dir_path, destination)
             .map_err(|e| Error::AmbiguousDestinationError { source: e })?;
@@ -201,19 +201,25 @@ fn export(
     destination: RenderDestination,
 ) -> Result<Export, Error> {
     let (filename, path) = match destination {
-        RenderDestination::SectionIndex {
-            output_directory: directory,
-        } => (String::from("index.html"), directory),
+        RenderDestination::SectionIndex { directory } => (String::from("index.html"), directory),
         RenderDestination::Permalink { directory } => {
             let hash = Params::new().hash_length(12).hash(&content.as_bytes());
             let hash_string = Base64Url::encode_string(hash.as_bytes());
             let filename = format!("{}.html", hash_string);
             (filename, directory)
         }
+        RenderDestination::Explicit {
+            directory,
+            filename,
+        } => (format!("{}.html", filename), directory),
     };
+    ensure_directory(&path).map_err(|e| Error::WriteExportError {
+        source: e,
+        name: name.clone(),
+    })?;
     let path = format!("{}/{}", path, filename);
     println!("exporting {} -> {}", name, path);
-    write_file_contents(&content, &path).map_err(|e| Error::WritePermalinkError {
+    write_file_contents(&content, &path).map_err(|e| Error::WriteExportError {
         source: e,
         name: name.clone(),
     })?;

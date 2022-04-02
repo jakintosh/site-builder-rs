@@ -107,9 +107,9 @@ pub(crate) struct PostOption {
 }
 #[derive(Serialize)]
 pub(crate) struct Post {
-    metadata: Metadata,
-    title: String,
-    html: String,
+    pub metadata: Metadata,
+    pub title: String,
+    pub html: String,
 }
 impl TryFrom<serde_json::Value> for Post {
     type Error = Error;
@@ -138,9 +138,9 @@ pub(crate) struct PageOption {
 }
 #[derive(Serialize)]
 pub(crate) struct Page {
-    metadata: Metadata,
-    title: String,
-    html: String,
+    pub metadata: Metadata,
+    pub title: String,
+    pub html: String,
 }
 impl TryFrom<serde_json::Value> for Page {
     type Error = Error;
@@ -164,6 +164,7 @@ impl From<PageOption> for Page {
 #[derive(Deserialize)]
 struct MetadataOption {
     content_name: Option<String>,
+    directory: Option<String>,
     author_name: String,
     published_date: String,
     updated_date: Option<String>,
@@ -171,16 +172,18 @@ struct MetadataOption {
 }
 #[derive(Serialize)]
 pub(crate) struct Metadata {
-    content_name: String,
-    author_name: String,
-    published_date: String,
-    updated_date: String,
-    version: u32,
+    pub content_name: String,
+    pub directory: String,
+    pub author_name: String,
+    pub published_date: String,
+    pub updated_date: String,
+    pub version: u32,
 }
 impl From<MetadataOption> for Metadata {
     fn from(option: MetadataOption) -> Self {
         Metadata {
             content_name: option.content_name.unwrap_or(String::from("")),
+            directory: option.directory.unwrap_or(String::from("")),
             author_name: option.author_name,
             updated_date: option.updated_date.unwrap_or(option.published_date.clone()),
             published_date: option.published_date,
