@@ -76,6 +76,16 @@ impl From<MarkdownString> for serde_json::Value {
 }
 
 #[derive(Serialize, Debug)]
+pub(crate) struct SamString {
+    content: String,
+}
+impl From<SamString> for serde_json::Value {
+    fn from(sam: SamString) -> Self {
+        serde_json::Value::String(sam.content)
+    }
+}
+
+#[derive(Serialize, Debug)]
 pub(crate) struct HtmlString {
     content: String,
 }
@@ -85,6 +95,15 @@ impl From<MarkdownString> for HtmlString {
         let parser = pulldown_cmark::Parser::new(&markdown.content);
         pulldown_cmark::html::push_html(&mut html, parser);
 
+        HtmlString { content: html }
+    }
+}
+impl From<SamString> for HtmlString {
+    fn from(sam: SamString) -> Self {
+        let html = match sam.content.parse::<sam_rs::Element>() {
+            Ok(element) => element.to_xml(0, false),
+            Err(err) => panic!("{}", err),
+        };
         HtmlString { content: html }
     }
 }

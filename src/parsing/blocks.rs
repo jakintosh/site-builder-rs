@@ -1,4 +1,4 @@
-use super::{Error, HtmlString, JsonString, MarkdownString};
+use super::{Error, HtmlString, JsonString, MarkdownString, SamString};
 
 pub(crate) struct Blocks(Vec<Block>);
 impl TryFrom<Blocks> for serde_json::Value {
@@ -175,6 +175,7 @@ enum BlockEncodings {
     Json,
     Markdown,
     Html,
+    Sam,
 }
 impl std::str::FromStr for BlockEncodings {
     type Err = String;
@@ -183,6 +184,7 @@ impl std::str::FromStr for BlockEncodings {
             "json" => Ok(BlockEncodings::Json),
             "markdown" => Ok(BlockEncodings::Markdown),
             "html" => Ok(BlockEncodings::Html),
+            "sam" => Ok(BlockEncodings::Sam),
             _ => Err(format!("'{}' is not a valid value for Formats", s)),
         }
     }
@@ -252,6 +254,7 @@ enum BlockContent {
     Json(JsonString),
     Markdown(MarkdownString),
     Html(HtmlString),
+    Sam(SamString),
 }
 impl BlockContent {
     fn transform(encoding: &BlockEncoding, content: String) -> BlockContent {
@@ -262,8 +265,10 @@ impl BlockContent {
                 Some(BlockEncodings::Markdown) => {
                     BlockContent::Html((MarkdownString { content }).into())
                 }
+                Some(BlockEncodings::Sam) => BlockContent::Html((SamString { content }).into()),
                 _ => BlockContent::Html(HtmlString { content }),
             },
+            BlockEncodings::Sam => BlockContent::Sam(SamString { content }),
         }
     }
 }
@@ -275,6 +280,7 @@ impl TryFrom<BlockContent> for serde_json::Value {
             BlockContent::Json(json) => json.try_into(),
             BlockContent::Markdown(md) => Ok(md.into()),
             BlockContent::Html(html) => Ok(html.into()),
+            BlockContent::Sam(sam) => Ok(sam.into()),
         }
     }
 }
