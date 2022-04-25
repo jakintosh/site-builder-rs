@@ -122,12 +122,14 @@ pub(crate) enum Content {
 pub(crate) struct PostOption {
     metadata: MetadataOption,
     title: String,
+    slug: String,
     content: String,
 }
 #[derive(Serialize)]
 pub(crate) struct Post {
     pub metadata: Metadata,
     pub title: String,
+    pub slug: String,
     pub html: String,
 }
 impl TryFrom<serde_json::Value> for Post {
@@ -144,6 +146,7 @@ impl From<PostOption> for Post {
         Post {
             metadata: option.metadata.into(),
             title: option.title,
+            slug: option.slug,
             html: option.content,
         }
     }

@@ -48,7 +48,6 @@ struct BuildConfig {
     config_file_path: String,
     content_dir_path: String,
     css_dir_path: String,
-    output_perma_dir_path: String,
     content_glob: String,
     components_glob: String,
     templates_glob: String,
@@ -85,10 +84,6 @@ fn create_build_config(args: Args) -> Result<BuildConfig> {
     let css_dir_path = format!("{src}/css", src = source_dir_path);
     expect_directory(&css_dir_path).context(r"Missing expected {src}/css directory")?;
 
-    let output_perma_dir_path = format!("{out}/permalink", out = output_dir_path);
-    ensure_directory(&output_perma_dir_path)
-        .context(r"Couldn't create {out}/permalink directory")?;
-
     let content_glob = format!("{cnt}/**/*.*", cnt = content_dir_path);
     let templates_glob = format!("{src}/templates/**/*.tmpl", src = source_dir_path);
     let components_glob = format!("{src}/components/**/*", src = source_dir_path);
@@ -100,7 +95,6 @@ fn create_build_config(args: Args) -> Result<BuildConfig> {
         output_dir_path,
         content_dir_path,
         css_dir_path,
-        output_perma_dir_path,
         content_glob,
         templates_glob,
         components_glob,
@@ -186,7 +180,7 @@ fn main() -> Result<()> {
                     build_config.output_dir_path.clone(),
                     post.metadata.directory.clone()
                 ),
-                filename: post.metadata.content_name.clone(),
+                filename: post.slug.clone(),
             },
         };
 
