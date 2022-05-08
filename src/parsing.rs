@@ -191,6 +191,7 @@ struct MetadataOption {
     published_date: String,
     updated_date: Option<String>,
     version: Option<u32>,
+    build: Option<bool>,
 }
 #[derive(Serialize)]
 pub(crate) struct Metadata {
@@ -200,6 +201,7 @@ pub(crate) struct Metadata {
     pub published_date: String,
     pub updated_date: String,
     pub version: u32,
+    pub build: bool,
 }
 impl From<MetadataOption> for Metadata {
     fn from(option: MetadataOption) -> Self {
@@ -210,6 +212,7 @@ impl From<MetadataOption> for Metadata {
             updated_date: option.updated_date.unwrap_or(option.published_date.clone()),
             published_date: option.published_date,
             version: option.version.unwrap_or(1),
+            build: option.build.unwrap_or(true),
         }
     }
 }

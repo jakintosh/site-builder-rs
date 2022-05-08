@@ -142,10 +142,14 @@ fn main() -> Result<()> {
             .context(format!("Failed to parse block file: {:?}", &path))?
         {
             Content::Post(post) => {
-                posts.insert(content_name, post);
+                if post.metadata.build {
+                    posts.insert(content_name, post);
+                }
             }
             Content::Page(page) => {
-                pages.insert(content_name, page);
+                if page.metadata.build {
+                    pages.insert(content_name, page);
+                }
             }
         };
     }
