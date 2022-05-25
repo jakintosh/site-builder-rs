@@ -1,4 +1,4 @@
-use super::{Error, HtmlString, JsonString, MarkdownString, SamString};
+use crate::parsing::{Error, HtmlString, JsonString, MarkdownString, SamString};
 
 pub(crate) struct Blocks(Vec<Block>);
 impl TryFrom<Blocks> for serde_json::Value {

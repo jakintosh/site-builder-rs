@@ -6,7 +6,9 @@
 /// `$ site-builder -s {$SOURCE_FILE_DIRECTORY} -d {$OUTPUT_DIRECTORY}`
 /// `$ site-builder --help`
 ///
+mod blocks;
 mod files;
+mod optimus;
 mod parsing;
 mod rendering;
 
@@ -19,10 +21,10 @@ use rendering::RenderPassDescriptor;
 use std::collections::HashMap;
 
 #[derive(Parser)]
-#[clap(name = "site-builer")]
+#[clap(name = "site-buidler")]
 #[clap(author = "@jakintosh")]
 #[clap(version = "0.1.0")]
-#[clap(about = "builds jakintosh.com", long_about = None)]
+#[clap(about = "builds a website", long_about = None)]
 struct Args {
     /// Directory where content is sourced from
     #[clap(short, long)]

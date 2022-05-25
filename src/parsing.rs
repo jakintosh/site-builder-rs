@@ -1,7 +1,5 @@
-mod blocks;
-
+use crate::blocks::Blocks;
 use crate::files::{read_file_contents, Error as FilesError};
-use blocks::Blocks;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json;
 use std::path::Path;
@@ -42,18 +40,12 @@ pub(crate) struct SiteSection {
     pub index_content: String,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct SiteContentType {
-    pub name: String,
-    pub content_template: String,
-}
-
 ///
 /// Content Structs
 
 #[derive(Serialize, Debug)]
 pub(crate) struct JsonString {
-    content: String,
+    pub(crate) content: String,
 }
 impl TryFrom<JsonString> for serde_json::Value {
     type Error = Error;
@@ -67,7 +59,7 @@ impl TryFrom<JsonString> for serde_json::Value {
 
 #[derive(Serialize, Debug)]
 pub(crate) struct MarkdownString {
-    content: String,
+    pub(crate) content: String,
 }
 impl From<MarkdownString> for serde_json::Value {
     fn from(markdown: MarkdownString) -> Self {
@@ -77,7 +69,7 @@ impl From<MarkdownString> for serde_json::Value {
 
 #[derive(Serialize, Debug)]
 pub(crate) struct SamString {
-    content: String,
+    pub(crate) content: String,
 }
 impl From<SamString> for serde_json::Value {
     fn from(sam: SamString) -> Self {
@@ -87,7 +79,7 @@ impl From<SamString> for serde_json::Value {
 
 #[derive(Serialize, Debug)]
 pub(crate) struct HtmlString {
-    content: String,
+    pub(crate) content: String,
 }
 impl From<MarkdownString> for HtmlString {
     fn from(markdown: MarkdownString) -> Self {
